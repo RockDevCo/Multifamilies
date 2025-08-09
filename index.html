@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple Property CRM</title>
+  <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 text-gray-900">
+  <div class="max-w-6xl mx-auto p-6">
+    <h1 class="text-2xl font-bold mb-4">Property CRM</h1>
+
+    <div class="flex gap-2 mb-4">
+      <input id="search" class="border p-2 rounded flex-1" placeholder="Search property, location, notes..." />
+      <select id="timelineFilter" class="border p-2 rounded">
+        <option value="">All timelines</option>
+      </select>
+      <button id="exportCsv" class="bg-blue-600 text-white px-4 py-2 rounded">Export CSV</button>
+      <button id="exportJson" class="bg-green-600 text-white px-4 py-2 rounded">Export JSON</button>
+      <button id="resetLocal" class="bg-red-500 text-white px-4 py-2 rounded">Reset</button>
+    </div>
+
+    <div class="bg-white shadow rounded overflow-x-auto">
+      <table id="crmTable" class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Property / Location</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Units</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timeline</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Contacted</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody" class="bg-white divide-y divide-gray-200"></tbody>
+      </table>
+    </div>
+
+    <div class="mt-6">
+      <h2 class="text-lg font-semibold">Add / Edit Property</h2>
+      <form id="editForm" class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3 bg-white p-4 rounded shadow">
+        <input id="f_property" placeholder="Property / Location" class="border p-2 rounded col-span-2" required />
+        <input id="f_units" type="number" placeholder="Units" class="border p-2 rounded" required />
+        <input id="f_timeline" placeholder="Timeline" class="border p-2 rounded" />
+        <input id="f_lastcontact" placeholder="Last Contacted (e.g., Mar 2025)" class="border p-2 rounded" />
+        <input id="f_notes" placeholder="Notes" class="border p-2 rounded col-span-2" />
+        <div class="col-span-1 flex items-center gap-2">
+          <button id="saveBtn" class="bg-indigo-600 text-white px-4 py-2 rounded">Save</button>
+          <button id="cancelBtn" type="button" class="bg-gray-300 px-4 py-2 rounded">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script>
+let data = [];
+const STORAGE_KEY = "property_crm_v1";
+const tableBody = document.getElementById("tableBody");
+const searchInput = document.getElementById("search");
+const timelineFilter = document.getElementById("timelineFilter");
+
+async function loadData() {
+  const local = localStorage.getItem(STORAGE_KEY);
+  if(local) {
+    data = JSON.parse(local);
+  } else {
+    const res = await fetch("data.json");
+    data = await res.json();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+  render();
+  populateFilter();
+}
+
+function populateFilter() {
+  const timelines = _.uniq(data.map(d => d.Timeline || "").filter(Boolean)).sort();
+  timelineFilter.innerHTML = '<option value="">All timelines</option>' + timelines.map(t => `<option value="${t}">${t}</option>`).join("");
+}
+
+function render() {
+  const q = searchInput.value.trim().toLowerCase();
+  const tf = timelineFilter.value;
+  const rows = data.filter(d => {
+    const hay = (d["Property / Location"] + " " + (d.Notes||"") + " " + (d.Timeline||"")).toLowerCase();
+    if(tf && d.Timeline !== tf) return false;
+    if(!q) return true;
+    return hay.includes(q);
+  });
+  tableBody.innerHTML = rows.map((r, i) => `
+    <tr class="hover:bg-gray-50">
+      <td class="px-6 py-4 whitespace-nowrap">${escapeHtml(r["Property / Location"])}</td>
+      <td class="px-6 py-4 whitespace-nowrap">${escapeHtml(String(r.Units||""))}</td>
+      <td class="px-6 py-4 whitespace-nowrap">${escapeHtml(r.Timeline||"")}</td>
+      <td class="px-6 py-4 whitespace-nowrap">${escapeHtml(r["Last Contacted"]||"")}</td>
+      <td class="px-6 py-4 whitespace-nowrap">${escapeHtml(r.Notes||"")}</td>
+      <td class="px-6 py-4 whitespace-nowrap">
+        <button onclick="editItem(${i})" class="text-indigo-600 hover:underline mr-2">Edit</button>
+        <button onclick="deleteItem(${i})" class="text-red-600 hover:underline">Delete</button>
+      </td>
+    </tr>`).join("");
+}
+
+function escapeHtml(text) {
+  return text ? text.replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]) }) : "";
+}
+
+function editItem(index) {
+  const item = data[index];
+  document.getElementById("f_property").value = item["Property / Location"] || "";
+  document.getElementById("f_units").value = item.Units || "";
+  document.getElementById("f_timeline").value = item.Timeline || "";
+  document.getElementById("f_lastcontact").value = item["Last Contacted"] || "";
+  document.getElementById("f_notes").value = item.Notes || "";
+  document.getElementById("saveBtn").dataset.editIndex = index;
+  window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+}
+
+function deleteItem(index) {
+  if(!confirm("Delete this property?")) return;
+  data.splice(index,1);
+  persist();
+  render();
+  populateFilter();
+}
+
+function persist() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+document.getElementById("editForm").addEventListener("submit", function(e){
+  e.preventDefault();
+  const newItem = {
+    "Property / Location": document.getElementById("f_property").value.trim(),
+    "Units": Number(document.getElementById("f_units").value) || 0,
+    "Timeline": document.getElementById("f_timeline").value.trim(),
+    "Last Contacted": document.getElementById("f_lastcontact").value.trim(),
+    "Notes": document.getElementById("f_notes").value.trim(),
+  };
+  const idx = document.getElementById("saveBtn").dataset.editIndex;
+  if(idx !== undefined && idx !== "") {
+    data[idx] = newItem;
+    document.getElementById("saveBtn").dataset.editIndex = "";
+  } else {
+    data.push(newItem);
+  }
+  persist();
+  render();
+  populateFilter();
+  this.reset();
+});
+
+document.getElementById("cancelBtn").addEventListener("click", function(){ document.getElementById("editForm").reset(); document.getElementById("saveBtn").dataset.editIndex = ""; });
+
+searchInput.addEventListener("input", _.debounce(render, 250));
+timelineFilter.addEventListener("change", render);
+
+document.getElementById("exportCsv").addEventListener("click", function(){
+  const csv = toCsv(data);
+  const blob = new Blob([csv], {type: "text/csv;charset=utf-8;"});
+  saveAs(blob, "property_crm_export.csv");
+});
+document.getElementById("exportJson").addEventListener("click", function(){
+  const blob = new Blob([JSON.stringify(data,null,2)], {type: "application/json"});
+  saveAs(blob, "property_crm_export.json");
+});
+document.getElementById("resetLocal").addEventListener("click", function(){
+  if(!confirm("Reset local data to original uploaded data.json?")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  loadData();
+});
+
+function toCsv(arr) {
+  if(!arr || !arr.length) return "";
+  const keys = Object.keys(arr[0]);
+  const lines = [keys.join(",")];
+  for(const row of arr) {
+    lines.push(keys.map(k => '"' + (String(row[k]||"").replace(/"/g,'""')) + '"').join(","));
+  }
+  return lines.join("\n");
+}
+
+// Initialize
+loadData();
+</script>
+</body>
+</html>
